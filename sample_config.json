@@ -1,0 +1,11 @@
+{
+  "llm_provider": "openai",
+  "api_keys": {
+    "tavily": "YOUR_TAVILY_API_KEY_HERE",
+    "openai": "YOUR_OPENAI_API_KEY_HERE"
+  },
+  "log_level": "debug",
+  "working_dir": "/Users/prathyushnallamothu/Desktop/Projects/OpenManus",
+  "max_memory_size": 100,
+  "timeout_seconds": 60
+}

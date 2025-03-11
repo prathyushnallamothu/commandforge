@@ -45,7 +45,7 @@ func NewReActAgent(name string, llmClient llm.Client, memory Memory) *ReActAgent
 		ToolHandler:         toolHandler,
 		ToolCollection:      toolCollection,
 		ConversationHistory: make([]llm.Message, 0),
-		MaxHistorySize:      50,
+		MaxHistorySize:      10, // Reduced from 50 to prevent token limit issues
 		SystemPrompt:        defaultReActSystemPrompt,
 		MaxIterations:       10, // Prevent infinite loops
 	}
@@ -73,11 +73,18 @@ Thought: I now have the information needed to answer the user's question.
 Final Answer: <your comprehensive response to the user>
 
 You have access to various tools that allow you to interact with the system, including:
-- Running bash commands
+- Running bash commands (with support for background execution)
 - Executing Python code
 - Managing files
 - Searching the web
 - Browsing web pages
+- Managing background commands
+
+For long-running commands (like web servers or continuous monitoring):
+1. Use the bash tool with background=true to run the command without blocking
+2. The command will return a command_id that you can use to check status
+3. Use the command_status tool with the command_id to check progress
+4. Use the list_commands tool to see all running background commands
 
 Be thorough in your reasoning, proactive in your actions, and clear in your final answers.`
 
@@ -163,6 +170,9 @@ func (a *ReActAgent) processRequest(ctx context.Context, request *Request) (stri
 		// Increment the iteration counter
 		iterationCount++
 
+		// Trim conversation history before creating the chat request
+		a.trimConversationHistory()
+
 		// Create a chat completion request
 		chatRequest := &llm.ChatCompletionRequest{
 			Messages:    a.ConversationHistory,
@@ -194,16 +204,9 @@ func (a *ReActAgent) processRequest(ctx context.Context, request *Request) (stri
 			return finalAnswer, nil
 		}
 
-		// Parse the ReAct pattern to extract the action and action input
-		action, actionInput, err := parseReActPattern(message.Content)
-		if err != nil {
-			// If we can't parse the ReAct pattern, check for tool calls directly
-			toolCalls, err := llm.ParseToolCalls(message)
-			if err != nil || len(toolCalls) == 0 {
-				// No tool calls and no ReAct pattern, just return the message content
-				return message.Content, nil
-			}
-
+		// Check for tool calls directly in the message
+		toolCalls, toolCallsErr := llm.ParseToolCalls(message)
+		if toolCallsErr == nil && len(toolCalls) > 0 {
 			// Process tool calls
 			toolResults, err := a.ToolHandler.ProcessToolCalls(ctx, toolCalls)
 			if err != nil {
@@ -213,6 +216,13 @@ func (a *ReActAgent) processRequest(ctx context.Context, request *Request) (stri
 			// Add tool results to conversation history
 			a.ConversationHistory = append(a.ConversationHistory, toolResults...)
 			continue
+		}
+
+		// If no tool calls, try to parse the ReAct pattern
+		action, actionInput, err := parseReActPattern(message.Content)
+		if err != nil {
+			// No tool calls and no ReAct pattern, just return the message content
+			return message.Content, nil
 		}
 
 		// Execute the action
@@ -311,11 +321,28 @@ func (a *ReActAgent) trimConversationHistory() {
 	// Keep the system message and the most recent messages
 	newHistory := make([]llm.Message, 0, a.MaxHistorySize)
 
-	// Always keep the system message
-	newHistory = append(newHistory, a.ConversationHistory[0])
+	// Always keep the system message (assuming it's the first message)
+	systemMessage := a.ConversationHistory[0]
+	newHistory = append(newHistory, systemMessage)
 
-	// Keep the most recent messages
-	start := len(a.ConversationHistory) - a.MaxHistorySize + 1
+	// Keep the user's original request (if available)
+	if len(a.ConversationHistory) > 1 {
+		// Find the first user message (which is likely the original request)
+		for i := 1; i < len(a.ConversationHistory); i++ {
+			if a.ConversationHistory[i].Role == "user" {
+				newHistory = append(newHistory, a.ConversationHistory[i])
+				break
+			}
+		}
+	}
+
+	// Keep the most recent messages, prioritizing tool results
+	start := len(a.ConversationHistory) - (a.MaxHistorySize - len(newHistory))
+	if start < 1 {
+		start = 1 // Ensure we don't include the system message again
+	}
+
+	// Add the most recent messages
 	newHistory = append(newHistory, a.ConversationHistory[start:]...)
 
 	a.ConversationHistory = newHistory

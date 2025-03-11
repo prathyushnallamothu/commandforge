@@ -64,13 +64,35 @@ func (t *BashTool) Execute(ctx context.Context, params map[string]interface{}) (
 		streaming = stream
 	}
 
+	// Get optional background flag
+	background := false
+	if bg, ok := params["background"].(bool); ok {
+		background = bg
+	}
+
 	// Get optional timeout
 	timeout := t.Timeout
 	if timeoutSec, ok := params["timeout"].(float64); ok && timeoutSec > 0 {
 		timeout = time.Duration(timeoutSec) * time.Second
 	}
 
-	// Create and execute the command
+	// If background is true, run the command in the background
+	if background {
+		// Start the command in the background
+		bgCmd, err := executor.ExecuteCommandWithStreaming(cmdStr, workingDir)
+		if err != nil {
+			return nil, fmt.Errorf("failed to start background command: %w", err)
+		}
+
+		// Return immediately with command ID and initial status
+		return map[string]interface{}{
+			"command_id": bgCmd.ID,
+			"running":   true,
+			"message":   fmt.Sprintf("Command started in background with ID: %s", bgCmd.ID),
+		}, nil
+	}
+
+	// Create and execute the command synchronously
 	cmd := executor.NewShellCommand(cmdStr, workingDir).WithTimeout(timeout)
 	if streaming {
 		cmd = cmd.WithStreaming()

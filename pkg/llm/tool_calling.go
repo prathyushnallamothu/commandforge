@@ -149,6 +149,10 @@ func (h *ToolCallingHandler) GenerateToolDefinitions() []ToolDefinition {
 				Type:        "boolean",
 				Description: "Whether to stream the output in real-time",
 			}
+			def.Function.Parameters.Properties["background"] = Property{
+				Type:        "boolean",
+				Description: "Whether to run the command in the background without waiting for completion",
+			}
 			def.Function.Parameters.Required = []string{"command"}
 
 		case "python":
@@ -191,6 +195,16 @@ func (h *ToolCallingHandler) GenerateToolDefinitions() []ToolDefinition {
 				Description: "The URL to browse",
 			}
 			def.Function.Parameters.Required = []string{"url"}
+			
+		case "command_status":
+			def.Function.Parameters.Properties["command_id"] = Property{
+				Type:        "string",
+				Description: "The ID of the background command to check",
+			}
+			def.Function.Parameters.Required = []string{"command_id"}
+			
+		case "list_commands":
+			// No parameters needed for list_commands
 		}
 
 		definitions = append(definitions, def)

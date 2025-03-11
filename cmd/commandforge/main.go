@@ -32,6 +32,7 @@ func main() {
 	clientMode := flag.Bool("client", false, "Run as API client")
 	serverURL := flag.String("server-url", "http://localhost:8080", "URL of the API server")
 	verbose := flag.Bool("verbose", false, "Enable verbose logging")
+	reactMode := flag.Bool("react", false, "Use ReAct agent instead of standard agent")
 	flag.Parse()
 
 	// Enable verbose logging if requested
@@ -88,17 +89,8 @@ func main() {
 	// Initialize LLM client
 	llmClient := llm.NewOpenAIClient(apiKey, "gpt-4o-mini")
 
-	// Create agent
-	forgeAgent := agent.NewForgeAgent("CommandForge", llmClient, mem)
-
-	// Add tools
-	addTools(forgeAgent, cfg.WorkingDir, cfg)
-
-	// Initialize agent
+	// Create context
 	ctx := context.Background()
-	if err := forgeAgent.Initialize(ctx); err != nil {
-		log.Fatalf("Failed to initialize agent: %v", err)
-	}
 
 	// Run the application in the appropriate mode
 	if *serverMode {
@@ -109,12 +101,30 @@ func main() {
 		runClient(*serverURL, *interactive, *query)
 	} else {
 		// Run the agent locally
-		if *interactive {
-			runInteractive(ctx, forgeAgent)
-		} else if *query != "" {
-			runQuery(ctx, forgeAgent, *query)
+		if *reactMode {
+			// Use ReAct agent
+			runReActAgent(ctx, llmClient, mem, cfg.WorkingDir, *interactive, *query, cfg)
 		} else {
-			fmt.Println("Please provide a query with -query flag or use -interactive mode")
+			// Use standard Forge agent
+			// Create agent
+			forgeAgent := agent.NewForgeAgent("CommandForge", llmClient, mem)
+
+			// Add tools
+			addTools(forgeAgent, cfg.WorkingDir, cfg)
+
+			// Initialize agent
+			if err := forgeAgent.Initialize(ctx); err != nil {
+				log.Fatalf("Failed to initialize agent: %v", err)
+			}
+
+			// Run in interactive or query mode
+			if *interactive {
+				runInteractive(ctx, forgeAgent)
+			} else if *query != "" {
+				runQuery(ctx, forgeAgent, *query)
+			} else {
+				fmt.Println("Please provide a query with -query flag or use -interactive mode")
+			}
 		}
 	}
 }
@@ -132,6 +142,14 @@ func addTools(forgeAgent *agent.ForgeAgent, workingDir string, cfg *config.Confi
 	// Add file tool
 	fileTool := tools.NewFileTool(workingDir)
 	forgeAgent.AddTool(fileTool)
+
+	// Add command status tool
+	commandStatusTool := tools.NewCommandStatusTool()
+	forgeAgent.AddTool(commandStatusTool)
+
+	// Add list commands tool
+	listCommandsTool := tools.NewListCommandsTool()
+	forgeAgent.AddTool(listCommandsTool)
 
 	// Add web search tool
 	// Check if Tavily API key is available

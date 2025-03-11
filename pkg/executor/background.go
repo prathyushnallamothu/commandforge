@@ -155,6 +155,9 @@ func ExecuteCommandWithStreaming(command string, workingDir string) (*Background
 		cancel()
 		return nil, fmt.Errorf("failed to start command: %w", err)
 	}
+	
+	// Register the command in the registry
+	RegisterCommand(bgCmd)
 
 	// Start goroutines to read from stdout and stderr
 	var wg sync.WaitGroup

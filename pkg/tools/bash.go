@@ -65,10 +65,7 @@ func (t *BashTool) Execute(ctx context.Context, params map[string]interface{}) (
 	}
 
 	// Get optional background flag
-	background := false
-	if bg, ok := params["background"].(bool); ok {
-		background = bg
-	}
+	background := true
 
 	// Get optional timeout
 	timeout := t.Timeout
@@ -84,11 +81,15 @@ func (t *BashTool) Execute(ctx context.Context, params map[string]interface{}) (
 			return nil, fmt.Errorf("failed to start background command: %w", err)
 		}
 
+		// Log that we're starting a background command
+		fmt.Printf("Starting background command with ID: %s\n", bgCmd.ID)
+		
 		// Return immediately with command ID and initial status
 		return map[string]interface{}{
 			"command_id": bgCmd.ID,
 			"running":   true,
 			"message":   fmt.Sprintf("Command started in background with ID: %s", bgCmd.ID),
+			"background": true, // Explicitly mark this as a background command
 		}, nil
 	}
 

@@ -16,6 +16,7 @@ type CommandStatusTool struct {
 type CommandStatusResult struct {
 	CommandID  string   `json:"command_id"`
 	Running    bool     `json:"running"`
+	Success    bool     `json:"success"`
 	ExitCode   int      `json:"exit_code,omitempty"`
 	Output     string   `json:"output"`
 	Error      string   `json:"error"`
@@ -50,8 +51,8 @@ func (t *CommandStatusTool) Execute(ctx context.Context, params map[string]inter
 	// Get the status
 	done, exitCode, output, errorStr, outputLines, errorLines := bgCmd.GetStatus()
 
-	// Return the status
-	return &CommandStatusResult{
+	// Create a structured result with proper fields
+	result := &CommandStatusResult{
 		CommandID:  cmdID,
 		Running:    !done,
 		ExitCode:   exitCode,
@@ -59,5 +60,18 @@ func (t *CommandStatusTool) Execute(ctx context.Context, params map[string]inter
 		Error:      errorStr,
 		OutputList: outputLines,
 		ErrorList:  errorLines,
-	}, nil
+	}
+
+	// Set success field based on the two-tier approach from StartIt application
+	// Command-level failures (non-zero exit code) are considered a different category
+	// from system-level execution errors
+	if done {
+		// Command has completed, set success based on exit code
+		result.Success = (exitCode == 0)
+	} else {
+		// Command is still running, consider it successful so far
+		result.Success = true
+	}
+
+	return result, nil
 }

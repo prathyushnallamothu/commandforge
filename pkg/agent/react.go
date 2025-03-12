@@ -45,9 +45,9 @@ func NewReActAgent(name string, llmClient llm.Client, memory Memory) *ReActAgent
 		ToolHandler:         toolHandler,
 		ToolCollection:      toolCollection,
 		ConversationHistory: make([]llm.Message, 0),
-		MaxHistorySize:      10, // Reduced from 50 to prevent token limit issues
+		MaxHistorySize:      1000, // Reduced from 50 to prevent token limit issues
 		SystemPrompt:        defaultReActSystemPrompt,
-		MaxIterations:       10, // Prevent infinite loops
+		MaxIterations:       100, // Increased from 10 to allow more iterations for complex tasks
 	}
 
 	return agent
@@ -213,6 +213,14 @@ func (a *ReActAgent) processRequest(ctx context.Context, request *Request) (stri
 				return "", fmt.Errorf("failed to process tool calls: %w", err)
 			}
 
+			// Ensure each tool result has a valid ToolCallID that matches one of the tool calls
+			for i := range toolResults {
+				if toolResults[i].Role == "tool" && toolResults[i].ToolCallID == "" && i < len(toolCalls) {
+					// If ToolCallID is missing, try to find a matching tool call
+					toolResults[i].ToolCallID = toolCalls[i].ID
+				}
+			}
+
 			// Add tool results to conversation history
 			a.ConversationHistory = append(a.ConversationHistory, toolResults...)
 			continue
@@ -244,8 +252,24 @@ func (a *ReActAgent) processRequest(ctx context.Context, request *Request) (stri
 		// Create an observation message
 		observationContent := ""
 		if actionError != nil {
+			// System-level execution error (tool couldn't be executed)
 			observationContent = fmt.Sprintf("Error: %v", actionError)
 		} else {
+			// Check for command-level failures (non-zero exit code)
+			resultMap, ok := actionResult.(map[string]interface{})
+			if ok {
+				exitCode, hasExitCode := resultMap["exitCode"].(float64)
+				if hasExitCode && exitCode != 0 {
+					// Command ran but failed with non-zero exit code
+					// Include both output and error in the result
+					resultMap["success"] = false
+					resultMap["error"] = fmt.Sprintf("Command failed with exit code %d", int(exitCode))
+					actionResult = resultMap
+				} else {
+					resultMap["success"] = true
+				}
+			}
+
 			// Convert the result to a string
 			resultJSON, err := json.MarshalIndent(actionResult, "", "  ")
 			if err != nil {
@@ -263,7 +287,7 @@ func (a *ReActAgent) processRequest(ctx context.Context, request *Request) (stri
 	}
 
 	// If we've reached the maximum number of iterations, return a timeout error
-	return "", fmt.Errorf("reached maximum number of iterations (%d) without finding a final answer", a.MaxIterations)
+	return "", fmt.Errorf("safety limit reached: exceeded %d iterations without finding a final answer", a.MaxIterations)
 }
 
 // parseReActPattern parses the ReAct pattern from a message
@@ -336,14 +360,63 @@ func (a *ReActAgent) trimConversationHistory() {
 		}
 	}
 
-	// Keep the most recent messages, prioritizing tool results
-	start := len(a.ConversationHistory) - (a.MaxHistorySize - len(newHistory))
+	// Create a map to track tool calls and their responses
+	toolCallMap := make(map[string]bool)
+	
+	// First pass: identify all tool call IDs that have tool responses
+	for _, msg := range a.ConversationHistory {
+		if msg.Role == "tool" && msg.ToolCallID != "" {
+			toolCallMap[msg.ToolCallID] = true
+		}
+	}
+
+	// Calculate how many messages we can keep
+	remainingSlots := a.MaxHistorySize - len(newHistory)
+	// Keep the most recent messages, ensuring tool calls and responses stay together
+	start := len(a.ConversationHistory) - remainingSlots
 	if start < 1 {
 		start = 1 // Ensure we don't include the system message again
 	}
 
-	// Add the most recent messages
-	newHistory = append(newHistory, a.ConversationHistory[start:]...)
+	// Create a list of messages to add, preserving tool call/response pairs
+	messagesToAdd := make([]llm.Message, 0, remainingSlots)
+	for i := start; i < len(a.ConversationHistory); i++ {
+		msg := a.ConversationHistory[i]
+		
+		// Always include non-tool messages
+		if msg.Role != "tool" {
+			messagesToAdd = append(messagesToAdd, msg)
+			continue
+		}
+		
+		// For tool messages, only include if we have the corresponding tool call
+		if msg.Role == "tool" && msg.ToolCallID != "" {
+			// Check if we have the corresponding tool call in our history
+			hasToolCall := false
+			for j := 1; j < len(a.ConversationHistory); j++ {
+				assistantMsg := a.ConversationHistory[j]
+				if assistantMsg.Role == "assistant" && assistantMsg.ToolCalls != nil {
+					for _, tc := range assistantMsg.ToolCalls {
+						if tc.ID == msg.ToolCallID {
+							hasToolCall = true
+							break
+						}
+					}
+				}
+				if hasToolCall {
+					break
+				}
+			}
+			
+			// Only include tool messages that have a corresponding tool call
+			if hasToolCall {
+				messagesToAdd = append(messagesToAdd, msg)
+			}
+		}
+	}
+
+	// Add the filtered messages to our history
+	newHistory = append(newHistory, messagesToAdd...)
 
 	a.ConversationHistory = newHistory
 }

@@ -201,13 +201,15 @@ func (a *CommandForgeAgent) Run(ctx context.Context, request *Request) (*Respons
 
 // processRequest processes a user request
 func (a *CommandForgeAgent) processRequest(ctx context.Context, request *Request) (string, error) {
-	// Initialize iteration counter to prevent infinite loops
+	// Initialize iteration counter (for logging purposes only)
 	iterationCount := 0
 
 	// Start the processing loop
-	for iterationCount < a.MaxIterations {
+	for {
 		// Increment the iteration counter
 		iterationCount++
+		// Log the current iteration for debugging
+		fmt.Printf("CommandForge: Processing iteration %d\n", iterationCount)
 
 		// Create a chat completion request
 		chatRequest := &llm.ChatCompletionRequest{
@@ -287,14 +289,73 @@ func (a *CommandForgeAgent) processRequest(ctx context.Context, request *Request
 				}
 			}
 
+			// If we've processed several iterations with tool calls but no final answer,
+			// and the last message is a regular content message (not a tool call),
+			// treat it as a final answer to avoid hitting the iteration limit
+			if iterationCount >= 5 && message.Content != "" {
+				fmt.Printf("CommandForge: Treating message as final answer after %d iterations\n", iterationCount)
+				return message.Content, nil
+			}
+
 			// No tool calls and no ReAct pattern, just return the message content
 			return message.Content, nil
 		}
 
 		// Process tool calls with special handling for streaming commands
+		// Log the tool calls for debugging
+		fmt.Printf("CommandForge: Processing %d tool calls\n", len(toolCalls))
+		for i, tc := range toolCalls {
+			fmt.Printf("CommandForge: Tool call %d: ID=%s, Name=%s\n", i, tc.ID, tc.Function.Name)
+		}
+
 		toolResults, err := a.processToolCalls(ctx, toolCalls)
 		if err != nil {
 			return "", fmt.Errorf("failed to process tool calls: %w", err)
+		}
+		
+		// Check if any of the tool results are for background commands
+		// If so, we'll consider this iteration complete and continue
+		for i, tr := range toolResults {
+			if tr.Role == "tool" && i < len(toolCalls) {
+				// Only consider bash commands with background flag as true background commands
+				if toolCalls[i].Function.Name == "bash" {
+					// Try to parse the content as JSON to check for background flag
+					var result map[string]interface{}
+					if err := json.Unmarshal([]byte(tr.Content), &result); err == nil {
+						// Check if this is a background command
+						if bg, ok := result["background"].(bool); ok && bg {
+							fmt.Printf("CommandForge: Detected background command started, marking iteration as complete\n")
+							
+							// Add the tool results to conversation history
+							a.ConversationHistory = append(a.ConversationHistory, toolResults...)
+							
+							// Add a final message to indicate the background command is running
+							cmdID, _ := result["command_id"].(string)
+							a.ConversationHistory = append(a.ConversationHistory, llm.Message{
+								Role:    "assistant",
+								Content: fmt.Sprintf("Background command with ID %s is now running. You can check its status later using the command_status tool.", cmdID),
+							})
+							
+							// Return a message to the user about the background command
+							return fmt.Sprintf("Background command with ID %s has been started. You can check its status using the command_status tool.", cmdID), nil
+						}
+					}
+				}
+			}
+		}
+
+		// Log the tool results for debugging
+		fmt.Printf("CommandForge: Got %d tool results\n", len(toolResults))
+		for i, tr := range toolResults {
+			fmt.Printf("CommandForge: Tool result %d: Role=%s, ToolCallID=%s\n", i, tr.Role, tr.ToolCallID)
+			// Ensure each tool result has a valid ToolCallID that matches one of the tool calls
+			if tr.Role == "tool" && tr.ToolCallID == "" {
+				// If ToolCallID is missing, try to find a matching tool call
+				if i < len(toolCalls) {
+					tr.ToolCallID = toolCalls[i].ID
+					fmt.Printf("CommandForge: Fixed missing ToolCallID: %s\n", tr.ToolCallID)
+				}
+			}
 		}
 
 		// Add tool results to conversation history
@@ -302,10 +363,14 @@ func (a *CommandForgeAgent) processRequest(ctx context.Context, request *Request
 
 		// Check if we need to trim the conversation history
 		a.trimConversationHistory()
+		
+		// Add a safety check to prevent excessive iterations
+		if iterationCount > 100 {
+			// This is just a safety measure to prevent truly infinite loops
+			// but it's set high enough that it should never be reached in normal operation
+			return "", fmt.Errorf("safety limit reached: exceeded 100 iterations without completing the task")
+		}
 	}
-
-	// If we've reached the maximum number of iterations, return a timeout error
-	return "", fmt.Errorf("reached maximum number of iterations (%d) without completing the task", a.MaxIterations)
 }
 
 // processToolCalls processes tool calls with special handling for streaming commands
@@ -319,18 +384,19 @@ func (a *CommandForgeAgent) processToolCalls(ctx context.Context, toolCalls []ll
 
 	for _, tc := range toolCalls {
 		// Check if this is a command execution tool that supports streaming
-		if a.StreamingEnabled && isStreamingCommandTool(tc.Function.Name) {
+		if a.StreamingEnabled && a.isStreamingCommandTool(tc.Function.Name) {
 			// Handle streaming command execution
 			resultMsg, err := a.handleStreamingCommand(ctx, tc)
 			if err != nil {
 				// Create an error message
 				resultMsg = llm.Message{
-					Role: "tool",
-					Content: fmt.Sprintf(
+					Role:       "tool",
+					Content:    fmt.Sprintf(
 						"Tool execution failed: %s\nError: %v",
 						tc.Function.Name,
 						err,
 					),
+					ToolCallID: tc.ID, // Add the tool call ID to associate with the preceding tool call
 				}
 			}
 			resultMessages = append(resultMessages, resultMsg)
@@ -340,8 +406,9 @@ func (a *CommandForgeAgent) processToolCalls(ctx context.Context, toolCalls []ll
 
 			// Create a result message
 			message := llm.Message{
-				Role:    "tool",
-				Content: "",
+				Role:       "tool",
+				Content:    "",
+				ToolCallID: tc.ID, // Add the tool call ID to associate with the preceding tool call
 			}
 
 			// Format the content based on success or failure
@@ -418,19 +485,21 @@ func (a *CommandForgeAgent) handleStreamingCommand(ctx context.Context, tc llm.T
 	resultJSON, err := json.MarshalIndent(result, "", "  ")
 	if err != nil {
 		return llm.Message{
-			Role:    "tool",
-			Content: fmt.Sprintf("%v", result),
+			Role:       "tool",
+			Content:    fmt.Sprintf("%v", result),
+			ToolCallID: tc.ID, // Add the tool call ID to associate with the preceding tool call
 		}, nil
 	}
 
 	return llm.Message{
-		Role:    "tool",
-		Content: string(resultJSON),
+		Role:       "tool",
+		Content:    string(resultJSON),
+		ToolCallID: tc.ID, // Add the tool call ID to associate with the preceding tool call
 	}, nil
 }
 
-// isStreamingCommandToolForForge checks if a tool supports streaming
-func isStreamingCommandToolForForge(toolName string) bool {
+// isStreamingCommandTool checks if a tool supports streaming
+func (a *CommandForgeAgent) isStreamingCommandTool(toolName string) bool {
 	// List of tools that support streaming
 	streamingTools := map[string]bool{
 		"run_command":        true,
@@ -455,9 +524,63 @@ func (a *CommandForgeAgent) trimConversationHistory() {
 	// Always keep the system message
 	newHistory = append(newHistory, a.ConversationHistory[0])
 
-	// Keep the most recent messages
-	start := len(a.ConversationHistory) - a.MaxHistorySize + 1
-	newHistory = append(newHistory, a.ConversationHistory[start:]...)
+	// Create a map to track tool calls and their responses
+	toolCallMap := make(map[string]bool)
+	
+	// First pass: identify all tool call IDs that have tool responses
+	for _, msg := range a.ConversationHistory {
+		if msg.Role == "tool" && msg.ToolCallID != "" {
+			toolCallMap[msg.ToolCallID] = true
+		}
+	}
+
+	// Calculate how many messages we can keep
+	remainingSlots := a.MaxHistorySize - 1 // -1 for the system message
+	// Keep the most recent messages, ensuring tool calls and responses stay together
+	start := len(a.ConversationHistory) - remainingSlots
+	if start < 1 {
+		start = 1 // Ensure we don't include the system message again
+	}
+
+	// Create a list of messages to add, preserving tool call/response pairs
+	messagesToAdd := make([]llm.Message, 0, remainingSlots)
+	for i := start; i < len(a.ConversationHistory); i++ {
+		msg := a.ConversationHistory[i]
+		
+		// Always include non-tool messages
+		if msg.Role != "tool" {
+			messagesToAdd = append(messagesToAdd, msg)
+			continue
+		}
+		
+		// For tool messages, only include if we have the corresponding tool call
+		if msg.Role == "tool" && msg.ToolCallID != "" {
+			// Check if we have the corresponding tool call in our history
+			hasToolCall := false
+			for j := 1; j < len(a.ConversationHistory); j++ {
+				assistantMsg := a.ConversationHistory[j]
+				if assistantMsg.Role == "assistant" && assistantMsg.ToolCalls != nil {
+					for _, tc := range assistantMsg.ToolCalls {
+						if tc.ID == msg.ToolCallID {
+							hasToolCall = true
+							break
+						}
+					}
+				}
+				if hasToolCall {
+					break
+				}
+			}
+			
+			// Only include tool messages that have a corresponding tool call
+			if hasToolCall {
+				messagesToAdd = append(messagesToAdd, msg)
+			}
+		}
+	}
+
+	// Add the filtered messages to our history
+	newHistory = append(newHistory, messagesToAdd...)
 
 	a.ConversationHistory = newHistory
 }

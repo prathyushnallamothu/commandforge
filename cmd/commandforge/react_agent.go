@@ -147,12 +147,10 @@ func addReActTools(reactAgent *agent.ReActAgent, workingDir string, cfg *config.
 		// Set a higher timeout for web search to ensure it completes
 		webSearchTool.WithTimeout(30 * time.Second)
 		reactAgent.AddTool(webSearchTool)
-		log.Printf("Added Tavily web search tool with API key")
 	} else {
 		// Fall back to the version that doesn't require API key
 		webSearchTool := tools.NewFallbackWebSearchTool()
 		reactAgent.AddTool(webSearchTool)
-		log.Printf("Added fallback web search tool (no Tavily API key found)")
 	}
 
 	// Add web browser tool

@@ -52,10 +52,72 @@ func (c *OpenAIClient) GetProvider() string {
 	return "openai"
 }
 
+// validateConversationHistory checks if the conversation history is valid for the OpenAI API
+// It ensures that all tool response messages have a corresponding tool call message
+func validateConversationHistory(messages []Message) error {
+	// Create a map to track tool calls
+	toolCallMap := make(map[string]bool)
+	
+	// First pass: identify all tool call IDs
+	for _, msg := range messages {
+		if msg.Role == "assistant" && msg.ToolCalls != nil {
+			for _, tc := range msg.ToolCalls {
+				toolCallMap[tc.ID] = true
+			}
+		}
+	}
+	
+	// Debug: Print all tool call IDs
+	fmt.Printf("Found %d tool call IDs in conversation history\n", len(toolCallMap))
+	for id := range toolCallMap {
+		fmt.Printf("  Tool call ID: %s\n", id)
+	}
+	
+	// Second pass: check if all tool responses have a corresponding tool call
+	var toolResponses []string
+	for i, msg := range messages {
+		if msg.Role == "tool" {
+			if msg.ToolCallID == "" {
+				// Tool response without a tool call ID
+				fmt.Printf("Warning: Tool response at index %d has no ToolCallID\n", i)
+				// We'll let this pass for now, as we've added fixes to ensure this doesn't happen
+			} else {
+				toolResponses = append(toolResponses, msg.ToolCallID)
+				if !toolCallMap[msg.ToolCallID] {
+					// Print detailed error information for debugging
+					fmt.Printf("Error: Tool response at index %d has invalid ToolCallID: %s\n", i, msg.ToolCallID)
+					
+					// Remove the invalid tool response from the conversation
+					// This is a temporary fix to allow the conversation to continue
+					// In a production environment, you might want to handle this differently
+					// messages = append(messages[:i], messages[i+1:]...)
+					// i-- // Adjust the index after removing an element
+					
+					// For now, just return an error
+					return fmt.Errorf("tool response message at index %d has no corresponding tool call (ID: %s)", i, msg.ToolCallID)
+				}
+			}
+		}
+	}
+	
+	// Debug: Print all tool response IDs
+	fmt.Printf("Found %d tool responses in conversation history\n", len(toolResponses))
+	for _, id := range toolResponses {
+		fmt.Printf("  Tool response ID: %s\n", id)
+	}
+	
+	return nil
+}
+
 // ChatCompletion generates a chat completion using the OpenAI API
 func (c *OpenAIClient) ChatCompletion(ctx context.Context, request *ChatCompletionRequest) (*ChatCompletionResponse, error) {
 	// Override the model with the client's model
 	request.Model = c.Model
+	
+	// Validate the conversation history
+	if err := validateConversationHistory(request.Messages); err != nil {
+		return nil, fmt.Errorf("invalid conversation history: %w", err)
+	}
 	
 	// Create a context with timeout
 	ctxWithTimeout, cancel := context.WithTimeout(ctx, c.Timeout)

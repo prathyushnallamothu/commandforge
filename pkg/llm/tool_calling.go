@@ -32,10 +32,16 @@ func (h *ToolCallingHandler) ProcessToolCalls(ctx context.Context, toolCalls []T
 		return nil, nil
 	}
 
+	// Debug: Log the tool calls being processed
+	fmt.Printf("ToolCallingHandler: Processing %d tool calls\n", len(toolCalls))
+	for i, tc := range toolCalls {
+		fmt.Printf("ToolCallingHandler: Tool call %d: ID=%s, Name=%s\n", i, tc.ID, tc.Function.Name)
+	}
+
 	// Process each tool call and collect results
 	resultMessages := make([]Message, 0, len(toolCalls))
 
-	for _, tc := range toolCalls {
+	for i, tc := range toolCalls {
 		// Execute the tool
 		result, err := h.executeTool(ctx, tc)
 
@@ -46,6 +52,9 @@ func (h *ToolCallingHandler) ProcessToolCalls(ctx context.Context, toolCalls []T
 			// Add the tool_call_id field required by OpenAI
 			ToolCallID: tc.ID,
 		}
+		
+		// Debug: Log the tool call ID being processed
+		fmt.Printf("ToolCallingHandler: Creating tool response for tool call %d: ID=%s\n", i, tc.ID)
 
 		// Format the content based on success or failure
 		if err != nil {

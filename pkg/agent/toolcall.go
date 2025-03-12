@@ -226,12 +226,13 @@ func (a *ToolCallAgent) processToolCalls(ctx context.Context, toolCalls []llm.To
 			if err != nil {
 				// Create an error message
 				resultMsg = llm.Message{
-					Role: "tool",
-					Content: fmt.Sprintf(
+					Role:       "tool",
+					Content:    fmt.Sprintf(
 						"Tool execution failed: %s\nError: %v",
 						tc.Function.Name,
 						err,
 					),
+					ToolCallID: tc.ID, // Add the tool call ID to associate with the preceding tool call
 				}
 			}
 			resultMessages = append(resultMessages, resultMsg)
@@ -241,8 +242,9 @@ func (a *ToolCallAgent) processToolCalls(ctx context.Context, toolCalls []llm.To
 
 			// Create a result message
 			message := llm.Message{
-				Role:    "tool",
-				Content: "",
+				Role:       "tool",
+				Content:    "",
+				ToolCallID: tc.ID, // Add the tool call ID to associate with the preceding tool call
 			}
 
 			// Format the content based on success or failure
@@ -300,14 +302,16 @@ func (a *ToolCallAgent) handleStreamingCommand(ctx context.Context, tc llm.ToolC
 	resultJSON, err := json.MarshalIndent(result, "", "  ")
 	if err != nil {
 		return llm.Message{
-			Role:    "tool",
-			Content: fmt.Sprintf("%v", result),
+			Role:       "tool",
+			Content:    fmt.Sprintf("%v", result),
+			ToolCallID: tc.ID, // Add the tool call ID to associate with the preceding tool call
 		}, nil
 	}
 
 	return llm.Message{
-		Role:    "tool",
-		Content: string(resultJSON),
+		Role:       "tool",
+		Content:    string(resultJSON),
+		ToolCallID: tc.ID, // Add the tool call ID to associate with the preceding tool call
 	}, nil
 }
 

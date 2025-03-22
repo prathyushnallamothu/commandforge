@@ -18,22 +18,26 @@ CommandForge is an autonomous AI agent framework built in Go that empowers devel
 
 - Go 1.24+
 - OpenAI API key (for GPT-4o models)
+- DeepSeek API key (for deepseek-chat models)
 - Optional: Tavily API key (for enhanced web search capabilities)
 
 ### Quick Start
 
 1. Clone the repository:
+
    ```bash
    git clone https://github.com/prathyushnallamothu/commandforge.git
    cd commandforge
    ```
 
 2. Copy the example environment file and edit it with your API keys:
+
    ```bash
    cp .env.example .env
    ```
 
 3. Build the application:
+
    ```bash
    go build ./cmd/commandforge
    ```
@@ -48,6 +52,7 @@ CommandForge is an autonomous AI agent framework built in Go that empowers devel
 CommandForge looks for a configuration file at `~/.commandforge/config.json`. You can specify a different path using the `-config` flag.
 
 Example configuration:
+
 ```json
 {
   "llm_provider": "openai",
@@ -67,21 +72,25 @@ Example configuration:
 ### Command Line Interface
 
 Run CommandForge in interactive mode:
+
 ```bash
 ./commandforge -interactive
 ```
 
 Run a single query:
+
 ```bash
 ./commandforge -query "Create a Python script that generates the Fibonacci sequence"
 ```
 
 Run as an API server:
+
 ```bash
 ./commandforge -server -addr ":8080"
 ```
 
 Connect to a running API server:
+
 ```bash
 ./commandforge -client -server-url "http://localhost:8080"
 ```

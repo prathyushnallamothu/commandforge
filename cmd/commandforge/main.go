@@ -59,24 +59,44 @@ func main() {
 	}
 
 	// Ensure working directory exists
-	if err := os.MkdirAll(cfg.WorkingDir, 0755); err != nil {
+	if err := os.MkdirAll(cfg.WorkingDir, 0o755); err != nil {
 		log.Fatalf("Failed to create working directory: %v", err)
 	}
 
-	// Check for API key
-	apiKey, ok := cfg.APIKeys["openai"]
-	if !ok || apiKey == "" {
-		// Try environment variable
-		apiKey = os.Getenv("OPENAI_API_KEY")
-		if apiKey == "" {
-			log.Fatalf("OpenAI API key not found. Please set it in the config file or OPENAI_API_KEY environment variable")
+	// Determine client type
+	clientType := cfg.LLMProvider
+	if clientType != "openai" && clientType != "deepseek" {
+		log.Fatalf("Client type not specified or invalid. Please set it to 'openai' or 'deepseek' in the config file.")
+	}
+
+	// Check for API key based on client type
+	var apiKey string
+	if clientType == "openai" {
+		apiKey, ok := cfg.APIKeys["openai"]
+		if !ok || apiKey == "" {
+			apiKey = os.Getenv("OPENAI_API_KEY")
+			if apiKey == "" {
+				log.Fatalf("OpenAI API key not found. Please set it in the config file or OPENAI_API_KEY environment variable")
+			}
+			if cfg.APIKeys == nil {
+				cfg.APIKeys = make(map[string]string)
+			}
+			cfg.APIKeys["openai"] = apiKey
+			config.SaveConfig(cfg, *configPath)
 		}
-		// Save to config
-		if cfg.APIKeys == nil {
-			cfg.APIKeys = make(map[string]string)
+	} else if clientType == "deepseek" {
+		apiKey, ok := cfg.APIKeys["deepseek"]
+		if !ok || apiKey == "" {
+			apiKey = os.Getenv("DEEPSEEK_API_KEY")
+			if apiKey == "" {
+				log.Fatalf("DeepSeek API key not found. Please set it in the config file or DEEPSEEK_API_KEY environment variable")
+			}
+			if cfg.APIKeys == nil {
+				cfg.APIKeys = make(map[string]string)
+			}
+			cfg.APIKeys["deepseek"] = apiKey
+			config.SaveConfig(cfg, *configPath)
 		}
-		cfg.APIKeys["openai"] = apiKey
-		config.SaveConfig(cfg, *configPath)
 	}
 
 	// Initialize memory
@@ -87,8 +107,12 @@ func main() {
 	}
 
 	// Initialize LLM client
-	llmClient := llm.NewOpenAIClient(apiKey, "gpt-4o-mini")
-
+	var llmClient llm.Client
+	if clientType == "openai" {
+		llmClient = llm.NewOpenAIClient(apiKey, "gpt-4o-mini")
+	} else if clientType == "deepseek" {
+		llmClient = llm.NewDeepSeekClient(apiKey, "deepseek-chat")
+	}
 	// Create context
 	ctx := context.Background()
 
@@ -371,7 +395,6 @@ func runInteractiveClient(client *api.Client) {
 			// Display command status
 			displayCommandStatus(status)
 		})
-
 		if err != nil {
 			fmt.Printf("Error streaming command status: %v\n", err)
 
